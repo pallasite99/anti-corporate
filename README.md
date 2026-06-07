@@ -112,6 +112,15 @@ To bundle the frontend with Vite's optimized tree-shaking asset compilers:
 npm run build
 ```
 
+### 4. LAN Multiplayer Lobby
+The app includes built-in local network multiplayer support using a WebSocket-based lobby.
+
+* Start the development server with `npm run dev`.
+* Open the app in a browser on one machine and switch to the LAN multiplayer setup mode.
+* Create a new room or join an existing room using the room code.
+* Other players on the same network can discover active rooms via the app's lobby list.
+* The host controls game start, and game state is synchronized across connected players using the server's `/ws/lan` and `/api/lan/rooms` endpoints.
+
 ---
 
 ## 📂 Core Structure Architecture
