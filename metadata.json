@@ -1,0 +1,8 @@
+{
+  "name": "Anti-Corporate",
+  "description": "A satirical digital board game inspired by Monopoly that critiques toxic workplace culture with credit cards and corporate debt.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
