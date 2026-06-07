@@ -113,13 +113,28 @@ npm run build
 ```
 
 ### 4. LAN Multiplayer Lobby
-The app includes built-in local network multiplayer support using a WebSocket-based lobby.
+This project includes a built-in LAN multiplayer lobby backed by an Express server and native WebSockets.
 
-* Start the development server with `npm run dev`.
-* Open the app in a browser on one machine and switch to the LAN multiplayer setup mode.
-* Create a new room or join an existing room using the room code.
-* Other players on the same network can discover active rooms via the app's lobby list.
-* The host controls game start, and game state is synchronized across connected players using the server's `/ws/lan` and `/api/lan/rooms` endpoints.
+* Start the multiplayer server via the app entrypoint:
+```bash
+npm run dev
+```
+* Open the app in a browser on one machine and choose the `LAN` setup mode.
+* Host a new room to generate a room code and invite link.
+* Other players can join by entering the room code or selecting the lobby from the active room list.
+* Inside the lobby, each player can mark themselves as `Ready`.
+* The host can only launch the game once all players are ready and at least two players are present.
+* If a player disconnects, they can reconnect to the previous room from the lobby screen if the session is still active.
+
+#### LAN server endpoints
+* `GET /api/lan/rooms` — discover active LAN rooms on the current node
+* `WS /ws/lan` — websocket endpoint used for room creation, join, ready toggles, chat, and state sync
+
+#### New multiplayer features
+* Invite link copy support for easier sharing with teammates
+* Player ready state and lobby readiness tracking
+* Reconnection support for dropped clients
+* Host migration when the current host disconnects
 
 ---
 

@@ -30,6 +30,7 @@ interface LANPlayer {
   roleIndex: number;
   isHost: boolean;
   isActive: boolean;
+  ready: boolean;
   color?: string;
   ws?: WebSocket;
 }
@@ -241,6 +242,7 @@ Also construct a 1-sentence summary log message suitable to put into our system 
               roleIndex: roleIndex,
               isHost: true,
               isActive: true,
+              ready: false,
               color: PLAYER_COLORS[0],
               ws: ws
             };
@@ -306,6 +308,7 @@ Also construct a 1-sentence summary log message suitable to put into our system 
               roleIndex: roleIndex,
               isHost: false,
               isActive: true,
+              ready: false,
               color: PLAYER_COLORS[room.players.length],
               ws: ws
             };
@@ -336,12 +339,83 @@ Also construct a 1-sentence summary log message suitable to put into our system 
             const room = rooms.get(clientRoomCode);
             if (!room || room.players[0].id !== clientPlayerId) return; // Only host starts
 
+            const unready = room.players.filter((player) => !player.ready);
+            if (unready.length > 0) {
+              ws.send(JSON.stringify({
+                type: "error",
+                payload: { message: `Cannot start until all players are ready (${unready.length} remaining).` }
+              }));
+              return;
+            }
+
+            if (room.players.length < 2) {
+              ws.send(JSON.stringify({
+                type: "error",
+                payload: { message: "At least 2 players must be connected to start the multiplayer game." }
+              }));
+              return;
+            }
+
             const { initialState } = payload;
             room.gameState = initialState;
 
             broadcastToRoom(room, {
               type: "game-started",
-              payload: { gameState: room.gameState }
+              payload: { gameState: room.gameState, playerId: clientPlayerId }
+            });
+            break;
+          }
+
+          case "reconnect-room": {
+            const { roomCode, playerId, playerName, roleIndex } = payload;
+            const code = roomCode.toUpperCase();
+            const room = rooms.get(code);
+            if (!room) {
+              ws.send(JSON.stringify({ type: "error", payload: { message: `LAN Room #${code} not found.` } }));
+              return;
+            }
+
+            const existingPlayer = room.players.find((p) => p.id === playerId);
+            if (!existingPlayer) {
+              ws.send(JSON.stringify({ type: "error", payload: { message: `Player session not found for ${playerId}. Please rejoin with a fresh room code.` } }));
+              return;
+            }
+
+            existingPlayer.ws = ws;
+            existingPlayer.isActive = true;
+            existingPlayer.name = playerName;
+            existingPlayer.roleIndex = roleIndex;
+            clientRoomCode = code;
+            clientPlayerId = playerId;
+
+            ws.send(JSON.stringify({
+              type: "room-rejoined",
+              payload: {
+                roomCode: code,
+                playerId,
+                players: serializePlayers(room.players),
+                roomName: room.name
+              }
+            }));
+
+            broadcastToRoom(room, {
+              type: "room-players",
+              payload: { players: serializePlayers(room.players) }
+            }, ws);
+            break;
+          }
+
+          case "toggle-ready": {
+            if (!clientRoomCode) return;
+            const room = rooms.get(clientRoomCode);
+            if (!room) return;
+            const player = room.players.find((p) => p.id === clientPlayerId);
+            if (!player) return;
+            player.ready = !player.ready;
+
+            broadcastToRoom(room, {
+              type: "room-players",
+              payload: { players: serializePlayers(room.players) }
             });
             break;
           }
@@ -393,34 +467,48 @@ Also construct a 1-sentence summary log message suitable to put into our system 
       if (clientRoomCode) {
         const room = rooms.get(clientRoomCode);
         if (room) {
-          const removedIdx = room.players.findIndex(p => p.id === clientPlayerId);
-          if (removedIdx !== -1) {
-            const wasHost = room.players[removedIdx].isHost;
-            room.players.splice(removedIdx, 1);
+          const player = room.players.find(p => p.id === clientPlayerId);
+          if (player) {
+            player.isActive = false;
+            player.ws = undefined;
 
-            if (room.players.length === 0) {
-              // Clean up empty rooms of all traces
-              rooms.delete(clientRoomCode);
-            } else {
-              if (wasHost) {
-                // Transfer administration to next player in list
-                room.players[0].isHost = true;
-                const sysChat = {
-                  id: Math.random().toString(),
-                  sender: "SYSTEM",
-                  text: `Host left. Room ownership assigned to ${room.players[0].name}.`,
-                  timestamp: new Date().toLocaleTimeString()
-                };
-                room.chats.push(sysChat);
-                broadcastToRoom(room, { type: "chat-broadcast", payload: sysChat });
-              }
+            const sysChat = {
+              id: Math.random().toString(),
+              sender: "SYSTEM",
+              text: `${player.name} disconnected from the LAN lobby. Awaiting possible reconnect.`,
+              timestamp: new Date().toLocaleTimeString()
+            };
+            room.chats.push(sysChat);
+            broadcastToRoom(room, { type: "chat-broadcast", payload: sysChat });
 
-              // Notify room players update
-              broadcastToRoom(room, {
-                type: "room-players",
-                payload: { players: serializePlayers(room.players) }
-              });
+            const activePlayers = room.players.filter((p) => p.isActive);
+            if (activePlayers.length === 0) {
+              setTimeout(() => {
+                const staleRoom = rooms.get(clientRoomCode!);
+                if (staleRoom && staleRoom.players.every((p) => !p.isActive)) {
+                  rooms.delete(clientRoomCode!);
+                }
+              }, 60000);
             }
+
+            if (player.isHost && activePlayers.length > 0) {
+              const newHost = activePlayers[0];
+              newHost.isHost = true;
+              player.isHost = false;
+              const hostTransferChat = {
+                id: Math.random().toString(),
+                sender: "SYSTEM",
+                text: `Host disconnected. Room ownership assigned to ${newHost.name}.`,
+                timestamp: new Date().toLocaleTimeString()
+              };
+              room.chats.push(hostTransferChat);
+              broadcastToRoom(room, { type: "chat-broadcast", payload: hostTransferChat });
+            }
+
+            broadcastToRoom(room, {
+              type: "room-players",
+              payload: { players: serializePlayers(room.players) }
+            });
           }
         }
       }
@@ -433,6 +521,8 @@ Also construct a 1-sentence summary log message suitable to put into our system 
       name: p.name,
       roleIndex: p.roleIndex,
       isHost: p.isHost,
+      isActive: p.isActive,
+      ready: p.ready,
       color: p.color
     }));
   }

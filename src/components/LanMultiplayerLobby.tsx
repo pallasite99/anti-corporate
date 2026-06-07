@@ -7,6 +7,8 @@ interface LANPlayer {
   name: string;
   roleIndex: number;
   isHost: boolean;
+  isActive: boolean;
+  ready: boolean;
   color?: string;
 }
 
@@ -53,6 +55,7 @@ export default function LanMultiplayerLobby({
   const [lobbyPlayers, setLobbyPlayers] = useState<LANPlayer[]>([]);
   const [myPlayerId, setMyPlayerId] = useState<string>("");
   const [isHost, setIsHost] = useState(false);
+  const [roomInviteLink, setRoomInviteLink] = useState<string>("");
 
   // Discoverable LAN lobbies
   const [discoveredRooms, setDiscoveredRooms] = useState<DiscoverableRoom[]>([]);
@@ -102,7 +105,30 @@ export default function LanMultiplayerLobby({
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chats]);
 
-  const connectToSocket = (roomCode: string, actionType: "create" | "join", customRoomName?: string) => {
+  const saveRoomSession = (roomCode: string, playerId: string, name: string, roleIndex: number) => {
+    window.sessionStorage.setItem("antiCorporateLanRoom", JSON.stringify({ roomCode, playerId, name, roleIndex }));
+  };
+
+  const clearRoomSession = () => {
+    window.sessionStorage.removeItem("antiCorporateLanRoom");
+  };
+
+  const makeInviteLink = (code: string) => {
+    const origin = window.location.origin;
+    return `${origin}${window.location.pathname}?lanRoom=${code}`;
+  };
+
+  const loadPreviousRoomSession = () => {
+    const stored = window.sessionStorage.getItem("antiCorporateLanRoom");
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored) as { roomCode: string; playerId: string; name: string; roleIndex: number };
+    } catch {
+      return null;
+    }
+  };
+
+  const connectToSocket = (roomCode: string, actionType: "create" | "join" | "reconnect", customRoomName?: string, playerId?: string) => {
     if (socketRef.current) {
       socketRef.current.close();
     }
@@ -128,11 +154,21 @@ export default function LanMultiplayerLobby({
             roleIndex: roleIndex
           }
         }));
-      } else {
+      } else if (actionType === "join") {
         socket.send(JSON.stringify({
           type: "join-room",
           payload: {
             roomCode,
+            playerName: name || "Colleague Anon",
+            roleIndex: roleIndex
+          }
+        }));
+      } else if (actionType === "reconnect" && playerId) {
+        socket.send(JSON.stringify({
+          type: "reconnect-room",
+          payload: {
+            roomCode,
+            playerId,
             playerName: name || "Colleague Anon",
             roleIndex: roleIndex
           }
@@ -147,12 +183,15 @@ export default function LanMultiplayerLobby({
 
         switch (type) {
           case "room-created":
-          case "room-joined": {
+          case "room-joined":
+          case "room-rejoined": {
             setStatus("lobby");
             setActiveCode(payload.roomCode);
             setMyPlayerId(payload.playerId);
             setIsHost(payload.playerId === "p-host");
             setLobbyPlayers(payload.players);
+            setRoomInviteLink(makeInviteLink(payload.roomCode));
+            saveRoomSession(payload.roomCode, payload.playerId, name, roleIndex);
             
             // Add custom connection line log
             setChats([{
@@ -166,6 +205,10 @@ export default function LanMultiplayerLobby({
 
           case "room-players": {
             setLobbyPlayers(payload.players);
+            const current = payload.players.find((p: LANPlayer) => p.id === myPlayerId);
+            if (current) {
+              setIsHost(current.isHost);
+            }
             break;
           }
 
@@ -202,10 +245,10 @@ export default function LanMultiplayerLobby({
     };
 
     socket.onclose = () => {
-      // Re-route player if game not started
-      if (status !== "lobby") {
-        setStatus("offline");
+      if (status === "lobby") {
+        setErrorMsg("Connection lost. Use the reconnect button to rejoin your room.");
       }
+      setStatus("offline");
     };
 
     socket.onerror = () => {
@@ -263,8 +306,49 @@ export default function LanMultiplayerLobby({
     setStatus("offline");
     setLobbyPlayers([]);
     setChats([]);
+    setActiveCode("");
+    setMyPlayerId("");
+    setIsHost(false);
+    setRoomInviteLink("");
+    clearRoomSession();
     fetchActiveRooms();
   };
+
+  const handleToggleReady = () => {
+    if (!socketRef.current || status !== "lobby" || !myPlayerId) return;
+    socketRef.current.send(JSON.stringify({
+      type: "toggle-ready",
+      payload: { playerId: myPlayerId }
+    }));
+  };
+
+  const handleReconnectLobby = () => {
+    const previousSession = loadPreviousRoomSession();
+    if (!previousSession) {
+      setErrorMsg("No saved room session found to reconnect.");
+      return;
+    }
+    setName(previousSession.name);
+    setRoleIndex(previousSession.roleIndex);
+    setRoomCodeInput(previousSession.roomCode);
+    connectToSocket(previousSession.roomCode, "reconnect", undefined, previousSession.playerId);
+  };
+
+  const handleCopyInviteLink = async () => {
+    if (!roomInviteLink) {
+      setErrorMsg("No active room invite link available yet.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(roomInviteLink);
+      setErrorMsg("Invite link copied to clipboard.");
+    } catch {
+      setErrorMsg("Unable to copy invite link. Please copy it manually.");
+    }
+  };
+
+  const myPlayerReady = lobbyPlayers.find((player) => player.id === myPlayerId)?.ready ?? false;
+  const allPlayersReady = lobbyPlayers.length > 0 && lobbyPlayers.every((player) => player.ready);
 
   const handleHostLaunchGame = () => {
     if (!isHost || status !== "lobby" || !socketRef.current) return;
@@ -428,13 +512,31 @@ export default function LanMultiplayerLobby({
 
             {/* Action buttons */}
             <div className="space-y-2">
-              {isHost ? (
+              <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleToggleReady}
+                className={`w-full py-2.5 ${myPlayerReady ? "bg-amber-700 hover:bg-amber-600" : "bg-slate-800 hover:bg-slate-700"} border-2 border-neutral-950 text-[#faf7f2] font-mono font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5`}
+              >
+                <Check className="w-4 h-4" />
+                <span>{myPlayerReady ? "Player Ready" : "Mark Ready"}</span>
+              </button>
+
+              <button
+                onClick={handleCopyInviteLink}
+                className="w-full py-2.5 bg-blue-900 hover:bg-blue-800 border-2 border-neutral-950 text-amber-300 font-mono font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span>Copy Invite Link</span>
+              </button>
+            </div>
+
+            {isHost ? (
                 <button
                   onClick={handleHostLaunchGame}
                   className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 border-2 border-neutral-950 text-[#faf7f2] font-mono font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-0.5"
                 >
                   <Gamepad2 className="w-4 h-4" />
-                  <span>Launch Multiplayer Game ({lobbyPlayers.length} / 4 Boarded)</span>
+                  <span>Launch Multiplayer Game ({lobbyPlayers.length} / 4 Boarded){allPlayersReady ? " – All Ready" : ""}</span>
                 </button>
               ) : (
                 <div className="text-center py-2 bg-neutral-100 border border-neutral-300 font-mono text-[10.5px] text-neutral-600 animate-pulse">
