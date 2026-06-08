@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ROLE_PRESETS } from "../constants";
-import { RefreshCw, Radio, Server, MessageSquare, ShieldAlert, Check, HelpCircle, Gamepad2, ArrowRight } from "lucide-react";
+import { RefreshCw, Radio, Server, MessageSquare, ShieldAlert, Check, HelpCircle, Gamepad2, ArrowRight, FolderOpen } from "lucide-react";
 
 interface LANPlayer {
   id: string;
