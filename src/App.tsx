@@ -36,6 +36,7 @@ import {
   RotateCcw,
   Sliders,
   HelpCircle,
+  Share2,
   FileSpreadsheet,
   Coins,
   ShieldCheck,
@@ -679,11 +680,14 @@ export default function App() {
     if (!shouldIFetch) return;
 
     let active = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12000);
 
     async function loadCareerDilemma() {
       try {
         const res = await fetch("/api/career-event/generate", {
           method: "POST",
+          signal: controller.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             playerName: currentPlayerObj.name,
@@ -692,9 +696,16 @@ export default function App() {
             currentStress: currentPlayerObj.stressLevel
           })
         });
-        const json = await res.json();
+        if (!res.ok) {
+          throw new Error(`Career event request failed with ${res.status}`);
+        }
 
-        if (json.success && active) {
+        const json = await res.json();
+        if (!json.success || !json.data) {
+          throw new Error("Career event response was missing scenario data");
+        }
+
+        if (active) {
           handleModifyState((prev) => {
             if (!prev.activeCareerEvent || prev.activeCareerEvent.id !== eventObj.id) return prev;
             return {
@@ -709,6 +720,33 @@ export default function App() {
         }
       } catch (err) {
         console.error("Failed to load Gemini career event:", err);
+        if (!active) return;
+
+        handleModifyState((prev) => {
+          if (!prev.activeCareerEvent || prev.activeCareerEvent.id !== eventObj.id) return prev;
+
+          const fallbackEvent = buildFallbackCareerEvent(currentPlayerObj);
+          const newLog: GameLog = {
+            id: Math.random().toString(),
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'system',
+            message: `Offline HR directive substituted for ${currentPlayerObj.name}; remote career audit timed out or failed.`,
+            playerId: currentPlayerObj.id,
+          };
+
+          return {
+            ...prev,
+            log: [newLog, ...prev.log],
+            activeCareerEvent: {
+              ...prev.activeCareerEvent,
+              ...fallbackEvent,
+              loading: false,
+              resolved: false,
+            }
+          };
+        });
+      } finally {
+        window.clearTimeout(timeoutId);
       }
     }
 
@@ -716,6 +754,8 @@ export default function App() {
 
     return () => {
       active = false;
+      controller.abort();
+      window.clearTimeout(timeoutId);
     };
   }, [gameState?.activeCareerEvent?.id, gameState?.activeCareerEvent?.loading]);
 
@@ -1144,6 +1184,43 @@ export default function App() {
     handlePlaySound('success');
   };
 
+  const handleShareStatus = async () => {
+    if (!gameState || typeof window === 'undefined') return;
+
+    const { title, text } = buildSharePayload(gameState, window.location.href);
+
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text });
+        return;
+      }
+
+      await navigator.clipboard.writeText(text);
+      setToasts((prev) => [
+        ...prev.slice(-3),
+        {
+          id: Math.random().toString(),
+          type: 'card',
+          title: 'SHARE TEXT COPIED',
+          message: 'Web Share API is unavailable here, so the recap was copied to your clipboard.',
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ]);
+    } catch (err) {
+      console.error('Share action failed', err);
+      setToasts((prev) => [
+        ...prev.slice(-3),
+        {
+          id: Math.random().toString(),
+          type: 'debt_warning',
+          title: 'SHARE UNAVAILABLE',
+          message: 'Your browser could not open the share sheet or copy the recap text.',
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ]);
+    }
+  };
+
   const handleSendPlayChat = (e: React.FormEvent) => {
     e.preventDefault();
     if (!playChatInput.trim().length || !lanSocketRef.current) return;
@@ -1207,6 +1284,17 @@ export default function App() {
             >
               <Sliders className="w-4 h-4" />
               <span>QA Console</span>
+            </button>
+          )}
+
+          {gameState && (
+            <button
+              onClick={handleShareStatus}
+              className="p-1.5 border border-sky-900 bg-sky-100 hover:bg-sky-200 text-sky-900 transition-all flex items-center gap-1 text-xs font-mono"
+              title="Share your current corporate status"
+            >
+              <Share2 className="w-4 h-4" />
+              <span>Share</span>
             </button>
           )}
 
@@ -1907,4 +1995,96 @@ function selectedSpaceIdOverLimitAndConfirmModalOpen(state: GameState, space: Bo
   // If human, they can click departments they own or unowned spaces to inspect
   if (state.selectedSpaceId === null) return false;
   return space.type === 'department';
+}
+
+function buildFallbackCareerEvent(player: Player): Pick<
+  NonNullable<GameState['activeCareerEvent']>,
+  'scenarioName' | 'situation' | 'optionA' | 'optionB'
+> {
+  return {
+    scenarioName: 'Legacy HR Escalation Memo',
+    situation: `${player.name} is pulled into an emergency alignment meeting after the remote HR directive service stops responding. The department still needs a decision, because bureaucracy never waits for infrastructure.`,
+    optionA: {
+      label: 'Accept the manual remediation sprint',
+      debtChange: -120,
+      stressChange: 18,
+    },
+    optionB: {
+      label: 'File a passive-aggressive outage report',
+      debtChange: 90,
+      stressChange: -12,
+    },
+  };
+}
+
+function buildSharePayload(state: GameState, currentUrl: string): { title: string; text: string } {
+  const winPlayer = state.winnerId !== null ? state.players[state.winnerId] : null;
+  const bankruptPlayer = state.players.find((player) => player.bankrupt) ?? null;
+  const escapedPlayer = state.players.find((player) => player.escaped) ?? null;
+  const primaryPlayer = winPlayer ?? bankruptPlayer ?? escapedPlayer ?? state.players.find((player) => !player.isAI) ?? state.players[state.currentPlayerId];
+
+  const victoryLabels: Record<NonNullable<GameState['victoryType']>, string> = {
+    financial_freedom: 'Financial Freedom',
+    last_standing: 'Last Worker Standing',
+    ceo_takeover: 'C-Suite Coup',
+  };
+
+  if (winPlayer) {
+    const victoryLabel = state.victoryType ? victoryLabels[state.victoryType] : 'Corporate Victory';
+    return {
+      title: 'Anti-Corporate corporate win',
+      text: [
+        'Anti-Corporate corporate win',
+        '',
+        `${winPlayer.name} just won by ${victoryLabel}.`,
+        `Debt balance: ₹${winPlayer.creditBalance} / ₹${winPlayer.creditLimit}`,
+        `Stress level: ${winPlayer.stressLevel}%`,
+        `Turn: ${state.turnCount}`,
+        `Play here: ${currentUrl}`,
+      ].join('\n'),
+    };
+  }
+
+  if (bankruptPlayer) {
+    return {
+      title: 'Anti-Corporate bankruptcy status',
+      text: [
+        'Anti-Corporate bankruptcy status',
+        '',
+        `${bankruptPlayer.name} has been declared bankrupt.`,
+        `Debt balance: ₹${bankruptPlayer.creditBalance} / ₹${bankruptPlayer.creditLimit}`,
+        `Stress level: ${bankruptPlayer.stressLevel}%`,
+        `Turn: ${state.turnCount}`,
+        `Play here: ${currentUrl}`,
+      ].join('\n'),
+    };
+  }
+
+  if (escapedPlayer) {
+    return {
+      title: 'Anti-Corporate win recap',
+      text: [
+        'Anti-Corporate win recap',
+        '',
+        `${escapedPlayer.name} reached financial freedom and escaped the office.`,
+        `Debt balance: ₹${escapedPlayer.creditBalance} / ₹${escapedPlayer.creditLimit}`,
+        `Stress level: ${escapedPlayer.stressLevel}%`,
+        `Turn: ${state.turnCount}`,
+        `Play here: ${currentUrl}`,
+      ].join('\n'),
+    };
+  }
+
+  return {
+    title: 'Anti-Corporate status update',
+    text: [
+      'Anti-Corporate status update',
+      '',
+      `${primaryPlayer.name} is still surviving the quarterly audit.`,
+      `Debt balance: ₹${primaryPlayer.creditBalance} / ₹${primaryPlayer.creditLimit}`,
+      `Stress level: ${primaryPlayer.stressLevel}%`,
+      `Turn: ${state.turnCount}`,
+      `Play here: ${currentUrl}`,
+    ].join('\n'),
+  };
 }

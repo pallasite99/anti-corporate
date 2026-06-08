@@ -58,6 +58,19 @@ When operations near total disaster (outstanding debt reaches within **5% of you
 * **The High-Stake Incentive**: Flipped passing interest rate parameters to **NEGATIVE** (e.g. Receive a refund credit instead of debt penalties each cycle) for **3 turns**.
 * **The Austerity Trade-off**: Direct operation freeze! You must **skip 2 consecutive turns** while federal auditors evaluate your books.
 
+### 6. Shareable Corporate Status Recaps
+The active game header includes a **Share** action for turning the current board state into a short text recap:
+* **Corporate wins** summarize the winner, victory type, debt balance, stress score, turn count, and current game URL.
+* **Bankruptcy updates** report the bankrupt employee's debt limit breach and stress level.
+* **In-progress status** falls back to the current human player's debt and stress position when no win or bankruptcy has happened yet.
+* The feature uses the browser **Web Share API** where supported and falls back to copying the generated recap text to the clipboard.
+
+### 7. Career Audit Event Reliability
+Random career-path dilemmas can be generated through the server AI endpoint, but the game guards the modal from staying stuck in an infinite loading state:
+* Career audit generation requests time out after 12 seconds.
+* Failed, timed-out, or malformed responses are replaced by an offline HR fallback dilemma.
+* A ledger entry is added when the offline fallback is used, keeping the turn actionable instead of blocking the game board.
+
 ---
 
 ## 🧪 System QA Unit Test Center & Interactive Sandbox
@@ -88,6 +101,8 @@ The codebase is built on strict software design practices, ensuring high scalabi
 * **Micro-Animations**: Staggered transition layout movements utilizing `motion` (from `motion/react`) for cards and actions.
 * **Component Modularity**: Isolated layout pieces (`Board.tsx`, `PlayerCard.tsx`, `ActionDocket.tsx`, `CorporateBailoutModal.tsx`) keeping the codebase highly maintainable.
 * **Browser-Standard Sound FX**: Built-in sound generation utilizing the browser's native **Web Audio API** (fully decoupled from external file dependencies to avoid load lag or asset rot).
+* **Browser-Native Sharing**: The active game header uses the **Web Share API** with clipboard fallback for portable match recaps.
+* **Fault-Tolerant AI Events**: Career audit requests use client-side timeout handling and local fallback data so failed AI calls do not freeze the turn.
 
 ---
 
